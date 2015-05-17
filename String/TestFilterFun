@@ -1,0 +1,15 @@
+def is_not_empty(s):
+    return s and len(s.strip()) > 0
+    #return ('sfkf' and 'sd')  # will return 'sd'
+    #return None and 'sd'   # will return None
+    #return 'dksj' and True # will return True
+    #return 'dksj' and False # will return False
+    #return True and 'dksj' # will return True
+
+print is_not_empty(None)
+print is_not_empty('skdhskdh')
+print filter(is_not_empty, ['test', None, '', 'str', '  ', 'END'])  
+
+# if para1 for filter is None, will not pass;  
+
+# if is 'sd' or True, will pass 
