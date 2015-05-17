@@ -14,4 +14,17 @@ def count():
     return fs
 
 f1, f2, f3 = count()
-print f1(), f2(), f3()
+print f1(), f2(), f3() # 9 9 9
+
+
+def count2():
+   fs = []
+   for i in range(1, 4):
+       def f(j):  ## 将循环变量作为参数传递给函数
+           def g():
+               return j*j
+           return g
+       fs.append(f(i))  # 返回带参数的函数
+   return fs
+f1, f2, f3 = count2()
+print f1(), f2(), f3()  # 1 4 9
