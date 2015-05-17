@@ -1,0 +1,10 @@
+import math
+
+
+def verify(num):
+    sqrtvalue = math.sqrt(num)
+    print sqrtvalue , " is round to : ", round(float(sqrtvalue))
+    return round(float(sqrtvalue)) == float(sqrtvalue)
+
+
+print filter(verify, range(0, 100))
