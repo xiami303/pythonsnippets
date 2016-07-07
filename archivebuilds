@@ -1,0 +1,351 @@
+import os, time, datetime, subprocess, sys, copy, re
+from random import randint
+
+
+##### some default values
+specifyday = None
+keeprate = 1
+maxdays = 150
+keepdays = 60
+destination = r'\\Share\Archive'
+status_log = 'status.log'
+
+
+def log_console(msg, level='msg'):
+    print('[%s] %s %s' % (level, str(datetime.datetime.now()), msg))
+    sys.stdout.flush()
+
+def log_status(msg, logfile ='status.log'):
+    fo = open(logfile, "w")
+    fo.write(msg)
+    fo.close()
+
+def log_to_file(msg, level='msg', logfile = "archive.log", to_console=True):
+    #  if error happens , log this to log file
+    if to_console:
+        log_console(msg,level)
+
+    msg = '[' + level + '] ' + str(datetime.datetime.now())+'\t' +msg+'\n'
+    fo = open(logfile, "a")
+    fo.write(msg)
+    fo.close()
+
+
+def get_period(frm, to= None):
+    if to is None:
+       to = time.localtime()
+
+    to_time = time.mktime(datetime.datetime(to.tm_year, to.tm_mon, to.tm_mday).timetuple())
+    frm_time = time.mktime(datetime.datetime(frm.tm_year, frm.tm_mon, frm.tm_mday).timetuple())
+
+    return to_time - frm_time
+
+def get_build_time(dirpath):
+        buildlog_path = os.path.join(dirpath, 'build_log.txt')
+        version_path = os.path.join(dirpath, 'version.txt')
+        if os.path.exists(buildlog_path):
+            return os.stat(buildlog_path).st_ctime
+        elif os.path.exists(version_path):
+            return os.stat(version_path).st_ctime
+        else:
+            # this time is not correct,  should never use this
+            return os.stat(dirpath).st_ctime
+
+
+def check_build(build_path):
+    buildlog_path = os.path.join(build_path, 'build_log.txt')
+    version_path = os.path.join(build_path, 'version.txt')
+    pc_path = os.path.join(build_path, 'pc')
+    if not os.path.exists(buildlog_path):
+        log_to_file("find one failed build : %s"% build_path)
+        return False
+
+    if not os.path.exists(version_path):
+        log_to_file("find one failed build : %s"% build_path)
+        return False
+
+    if not os.path.exists(pc_path):
+        log_to_file("find one failed build : %s"% build_path)
+        return False
+
+    return True
+
+
+def removeEmptyFolders(path, removeRoot=True):
+  if not os.path.isdir(path):
+    return
+
+  files = os.listdir(path)
+  if len(files):
+    for f in files:
+      fullpath = os.path.join(path, f)
+      if os.path.isdir(fullpath):
+        removeEmptyFolders(fullpath)
+
+  files = os.listdir(path)
+  if len(files) == 0 and removeRoot:
+    print "Removing empty folder:", path
+    os.rmdir(path)
+
+
+# get all builds, if keepdays is not passed in, will get all builds under folder spath
+# if passed in, will check get the builds between now & keepdays before today
+def get_all_builds(spath, keepdays=None):
+    result = {}
+    builds =  os.listdir(spath)
+    for build in builds:
+        build_path = os.path.join(spath, build)
+        stime = time.localtime(get_build_time(build_path))
+        dis_period = get_period(stime, time.localtime())
+        if keepdays is not None:
+            if dis_period >= int(keepdays) * 24 * 3600:
+                key = time.strftime("%Y-%m-%d",stime)
+                if result.has_key(key):
+                    result[key].append(build)
+                else:
+                    result[key] = [build]
+
+        else:
+            key = time.strftime("%Y-%m-%d",stime)
+            if result.has_key(key):
+                result[key].append(build)
+            else:
+                result[key] = [build]
+
+    log_to_file("Get all builds: " + str(sorted(result.keys(), reverse=False)))
+    return result
+
+def clear_fail_builds(dirpath, keepdays):
+    builds = os.listdir(dirpath)
+    for build in builds:
+        build_path = os.path.join(dirpath, build)
+        ctime = time.localtime(get_build_time(build_path))
+        if get_period(ctime) > int(keepdays) * 24 * 3600:
+            #  should delete this build
+            if not check_build(build_path):
+                delete_folder(build_path)
+                return
+
+
+def clear_old_archive(dirpath, pastdays):
+    builds = os.listdir(dirpath)
+    for build in builds:
+        build_path = os.path.join(dirpath, build)
+        # clean builds too long ago
+        ctime = time.localtime(get_build_time(build_path))
+        if get_period(ctime) > int(pastdays) * 24 * 3600:
+            #  should delete this build
+            delete_folder(build_path)
+            return
+
+###   move folders
+def move_folder(src, dst):
+    log_to_file('Moving "%s" to "%s"...' % (src, dst))
+    subprocess.check_call('robocopyCmd.bat "%s" "%s" /E /DCOPY:T /MOVE /R:10 /W:1 /NP' % (src, dst), shell=True)
+    if os.path.exists(src):
+        subprocess.check_call('robocopyCmd.bat "%s" "%s" /E /DCOPY:T /MOVE /R:10 /W:1 /NP' % (src, dst), shell=True)
+
+    if os.path.exists(src):
+        # if empty folder failed to be moved,  delete it ~~~
+        removeEmptyFolders(src)
+
+    if os.path.exists(src):
+        log_to_file('Archive Failure ' +  'Failed to move "%s" to "%s"' % (src, dst), "error")
+        log_status('failed moving: %s to %s'% (src, dst))
+        raise Exception('Archive Failure ', 'Failed to move "%s" to "%s".\r\n' % (src, dst))
+    else:
+        log_to_file('Archive Success: moved "%s" to "%s"' % (src, dst), "log")
+        if os.path.exists(status_log):
+            os.remove(status_log)
+
+###  delete folders
+def delete_folder(dirpath):
+    log_to_file('Deleting "%s".' % dirpath)
+    
+    subprocess.check_call(r'rd /s /q "%s"' % dirpath, shell=True)
+    if os.path.exists(dirpath):
+        subprocess.check_call(r'rd /s /q "%s"' % dirpath, shell=True)
+
+    if os.path.exists(dirpath):
+        log_to_file('Archive Failure ' + 'Failed to delete' + dirpath, "error")
+        log_status('failed deleting: %s '% dirpath)
+        raise Exception('Archive Failure ', 'Failed to delete "%s".\r\n' % dirpath)
+    else:
+        log_to_file('Archive Success: deleted ' + dirpath, "msg")
+        if os.path.exists(status_log):
+            os.remove(status_log)
+
+
+def archive(src, dst, keeprate, keepdays, spday= None):
+    builds = get_all_builds(src, keepdays)
+    if len(builds)> 0:
+        if spday is None :
+            spday = [ v for v in sorted(builds.keys(), reverse=False)][0]  #### find  the oldest day
+
+        log_to_file("will copy builds on specifyday =>" +spday)
+        if builds.has_key(spday):
+            t_builds = copy.copy(builds[spday])
+        else:
+            ### do nothing, parameter spday is not correct, which should looks like: 2012-12-29
+            log_to_file("no builds need to be archive on this day: "+ spday +"; check parameters passed in to archive function~~~")
+            raise Exception("no builds need to be archive on this day: %s,  check parameters passed in to archive function~~~" % spday)
+
+        c_sholdcopy = 1
+        s = len(t_builds) * keeprate
+        if s >1 :
+            c_sholdcopy = round(s)
+
+        to_move_builds = []
+        while(c_sholdcopy >0):
+            randindex = randint(0, len(t_builds)-1)
+            select_build = t_builds[randindex]
+            t_builds.remove(select_build)
+
+            if  select_build not in to_move_builds and check_build(os.path.join(src, select_build)):
+                to_move_builds.append(select_build)
+                c_sholdcopy = c_sholdcopy - 1
+
+            if len(t_builds) <=0:
+                break
+
+        to_delete_builds= filter(lambda x: x not in to_move_builds,  builds[spday])
+
+        ### might also nice to log this to the console out put
+        log_to_file("to_move_builds: " + str(to_move_builds))
+        log_to_file("to_delete_builds: " +str(to_delete_builds))
+
+        if len(to_delete_builds)>0:
+            for item in to_delete_builds:
+                dir_path = os.path.join(src, item)
+                delete_folder(dir_path)
+
+        if len(to_move_builds) >0 :
+            ##  do the copy
+            for item in to_move_builds:
+                src_path = os.path.join(src, item)
+                dst_path = os.path.join(dst, item)
+                move_folder(src_path, dst_path)
+
+    else:
+        log_to_file("no builds need to be archived from %s "% src, 'msg')
+
+
+def repair(src, dst, keepdays=10):
+    # will check some builds are split copied because disk is full or some network problems
+    src_builds = get_all_builds(src, keepdays=keepdays)
+    dst_builds = get_all_builds(dst, keepdays=keepdays)
+
+    for item in src_builds:
+        if dst_builds.has_key(item):
+            src_buildlist = src_builds[item]
+            dst_buildlist = dst_builds[item]
+            for build in src_buildlist:
+                if build in dst_buildlist:
+                    log_to_file("begin to repair build :  copy from "+ src_buildlist + "to" + dst_path)
+                    src_path = os.path.join(src, build)
+                    dst_path = os.path.join(dst, build)
+                    move_folder(src_path, dst_path)
+
+
+
+def usage():
+    print('%s usage : \n [-keeprate <the rate you want to keep>]\n'
+          ' -keepdays <earlier than this will be archived, fail builds will be deleted>\n'
+          ' -maxdays <earlier than this will be deleted>\n'
+          ' -spath <source path to archive from>\n'
+          ' -dpath <destination to archive to>\n'
+          ' -action <clean: clean old or fail builds; archive: archive builds>\n'
+          % (sys.argv[0])
+    )
+
+
+def parse_args(args):
+    if len(args) < 2:
+        usage()
+        return False
+    it = iter(args)
+    next(it)
+    for arg in it:
+        if arg == '-keeprate':
+            global keeprate
+            keeprate = float(next(it))
+        if arg == '-keepdays':
+            global keepdays
+            keepdays = int(next(it))
+        if arg == '-maxdays':
+            global maxdays
+            maxdays = int(next(it))
+        if arg == '-spath':
+            global source
+            source = next(it)
+        elif arg == '-dpath':
+            global destination
+            destination = next(it)
+        elif arg == '-action':
+            global action
+            action = next(it)
+        elif arg == '-specifyday':
+            global specifyday
+            specifyday = next(it)
+
+    if action is None:
+        log_to_file("please passed in parameter action", 'error')
+        sys.exit(1)
+    if source is None:
+        log_to_file("please passed in parameter source", 'error')
+        sys.exit(1)
+
+    if not os.path.exists(source):
+        log_to_file("can't access path: %s "%source, 'error')
+        sys.exit(1)
+
+
+    if action not in ['clean', 'archive', 'repair']:
+        log_to_file("parameter action => %s is not allowed ~" % action, 'error')
+        usage()
+        sys.exit(1)
+
+    return True
+
+
+def main():
+    if not parse_args(sys.argv):
+        sys.exit(1)
+
+    log_to_file("begin to %s"%action, "msg")
+    if action == "clean":
+        clear_fail_builds(source, keepdays)
+        clear_old_archive(source, maxdays)
+
+    elif action == "archive":
+        # before archive check the last build status to know whether there are failed moving or deleting
+        status_log = 'status.log'
+        if os.path.exists(status_log):
+            ###########   last build failed to move or delete
+            fo = open(status_log, "r")
+            status = fo.read().strip()
+            fo.close()
+
+            if status!='':
+                pat = r'failed (.*?):(.*?)to(.*)'
+                msg = re.match(pat, status, re.S).groups()
+                if msg[0].strip() =='moving':
+                    # move this folder again
+                    move_folder(msg[1].strip(), msg[2].strip())
+                elif msg[0].strip() == 'deleting':
+                    delete_folder(msg[1]).strip()
+
+        else:   ### no status file exist, means,  the last move is a success
+            if specifyday is None:
+                archive(source, destination, keeprate, keepdays, None)
+            else:
+                archive(source, destination, keeprate, keepdays, specifyday)
+
+    elif action == "repair":
+        # will repair the builds split to 2 parts because of failed move
+        repair(source, destination, keepdays)
+
+
+if __name__ == "__main__":
+    # call the main method to start
+    main()
