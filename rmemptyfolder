@@ -1,0 +1,23 @@
+import os
+
+def removeEmptyFolders(path, removeRoot=True):
+  if not os.path.isdir(path):
+    return
+
+  files = os.listdir(path)
+  if len(files):
+    for f in files:
+      fullpath = os.path.join(path, f)
+      if os.path.isdir(fullpath):
+        removeEmptyFolders(fullpath)
+
+  files = os.listdir(path)
+  if len(files) == 0 and removeRoot:
+    print "Removing empty folder:", path
+    os.rmdir(path)
+
+
+#########test code############
+
+dirpath = r"e:\test\test1"
+removeEmptyFolders(dirpath, True)
